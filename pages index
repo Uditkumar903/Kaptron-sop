@@ -1,0 +1,246 @@
+import { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+export default function Home() {
+  const [sops, setSops] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({
+    title: '',
+    purpose: '',
+    tools: '',
+    machine: '',
+    steps: '',
+    inspection: '',
+    notes: '',
+    image_url: ''
+  });
+  const [imageFile, setImageFile] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+
+  useEffect(() => {
+    fetchSOPs();
+
+    // Real-time subscription for changes
+    const subscription = supabase
+      .channel('public:sops')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sops' }, () => {
+        fetchSOPs();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+  }, []);
+
+  async function fetchSOPs() {
+    setLoading(true);
+    const { data, error } = await supabase.from('sops').select('*').order('id', { ascending: true });
+    if (!error) setSops(data);
+    setLoading(false);
+  }
+
+  function resetForm() {
+    setForm({
+      title: '',
+      purpose: '',
+      tools: '',
+      machine: '',
+      steps: '',
+      inspection: '',
+      notes: '',
+      image_url: ''
+    });
+    setImageFile(null);
+    setEditingId(null);
+  }
+
+  async function uploadImage(file) {
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Date.now()}.${fileExt}`;
+    const filePath = `public/${fileName}`;
+
+    let { error: uploadError } = await supabase.storage.from('sop-images').upload(filePath, file, { upsert: true });
+    if (uploadError) {
+      alert('Image upload failed: ' + uploadError.message);
+      return null;
+    }
+
+    const { data } = supabase.storage.from('sop-images').getPublicUrl(filePath);
+    return data.publicUrl;
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    let imageUrl = form.image_url;
+
+    if (imageFile) {
+      const uploadedUrl = await uploadImage(imageFile);
+      if (uploadedUrl) imageUrl = uploadedUrl;
+    }
+
+    if (editingId) {
+      // Update existing SOP
+      const { error } = await supabase.from('sops').update({
+        title: form.title,
+        purpose: form.purpose,
+        tools: form.tools,
+        machine: form.machine,
+        steps: form.steps,
+        inspection: form.inspection,
+        notes: form.notes,
+        image_url: imageUrl
+      }).eq('id', editingId);
+
+      if (error) alert('Update error: ' + error.message);
+      else resetForm();
+    } else {
+      // Insert new SOP
+      const { error } = await supabase.from('sops').insert([{
+        title: form.title,
+        purpose: form.purpose,
+        tools: form.tools,
+        machine: form.machine,
+        steps: form.steps,
+        inspection: form.inspection,
+        notes: form.notes,
+        image_url: imageUrl
+      }]);
+
+      if (error) alert('Insert error: ' + error.message);
+      else resetForm();
+    }
+  }
+
+  async function handleEdit(sop) {
+    setForm({
+      title: sop.title,
+      purpose: sop.purpose,
+      tools: sop.tools,
+      machine: sop.machine,
+      steps: sop.steps,
+      inspection: sop.inspection,
+      notes: sop.notes,
+      image_url: sop.image_url || ''
+    });
+    setEditingId(sop.id);
+  }
+
+  async function handleDelete(id) {
+    if (!confirm('Delete this SOP?')) return;
+    const { error } = await supabase.from('sops').delete().eq('id', id);
+    if (error) alert('Delete error: ' + error.message);
+  }
+
+  return (
+    <div style={{ maxWidth: 800, margin: 'auto', padding: 20 }}>
+      <h1>Part Production SOP Portal</h1>
+
+      <form onSubmit={handleSubmit} style={{ marginBottom: 20 }}>
+        <input
+          required
+          placeholder="Title"
+          value={form.title}
+          onChange={e => setForm({ ...form, title: e.target.value })}
+          style={{ width: '100%', marginBottom: 8 }}
+        />
+        <textarea
+          placeholder="Purpose"
+          value={form.purpose}
+          onChange={e => setForm({ ...form, purpose: e.target.value })}
+          style={{ width: '100%', marginBottom: 8, height: 40 }}
+        />
+        <textarea
+          placeholder="Tools and Materials"
+          value={form.tools}
+          onChange={e => setForm({ ...form, tools: e.target.value })}
+          style={{ width: '100%', marginBottom: 8, height: 40 }}
+        />
+        <input
+          placeholder="Machine / Fixture"
+          value={form.machine}
+          onChange={e => setForm({ ...form, machine: e.target.value })}
+          style={{ width: '100%', marginBottom: 8 }}
+        />
+        <textarea
+          placeholder="Step-by-Step Procedure"
+          value={form.steps}
+          onChange={e => setForm({ ...form, steps: e.target.value })}
+          style={{ width: '100%', marginBottom: 8, height: 80 }}
+        />
+        <textarea
+          placeholder="Inspection / Quality Checks"
+          value={form.inspection}
+          onChange={e => setForm({ ...form, inspection: e.target.value })}
+          style={{ width: '100%', marginBottom: 8, height: 40 }}
+        />
+        <textarea
+          placeholder="Notes / Safety Instructions"
+          value={form.notes}
+          onChange={e => setForm({ ...form, notes: e.target.value })}
+          style={{ width: '100%', marginBottom: 8, height: 40 }}
+        />
+
+        <input
+          type="file"
+          accept="image/*"
+          onChange={e => {
+            if (e.target.files.length > 0) setImageFile(e.target.files[0]);
+          }}
+          style={{ marginBottom: 8 }}
+        />
+
+        <button type="submit" style={{ marginRight: 10 }}>
+          {editingId ? 'Update SOP' : 'Add SOP'}
+        </button>
+        {editingId && (
+          <button
+            type="button"
+            onClick={() => {
+              setForm({
+                title: '',
+                purpose: '',
+                tools: '',
+                machine: '',
+                steps: '',
+                inspection: '',
+                notes: '',
+                image_url: ''
+              });
+              setEditingId(null);
+              setImageFile(null);
+            }}
+          >
+            Cancel
+          </button>
+        )}
+      </form>
+
+      {loading ? (
+        <p>Loading SOPs...</p>
+      ) : (
+        sops.map(sop => (
+          <div key={sop.id} style={{ border: '1px solid #ccc', marginBottom: 10, padding: 10 }}>
+            <h2>{sop.title}</h2>
+            <p><strong>Purpose:</strong> {sop.purpose}</p>
+            <p><strong>Tools:</strong> {sop.tools}</p>
+            <p><strong>Machine:</strong> {sop.machine}</p>
+            <p><strong>Steps:</strong> {sop.steps}</p>
+            <p><strong>Inspection:</strong> {sop.inspection}</p>
+            <p><strong>Notes:</strong> {sop.notes}</p>
+            {sop.image_url && (
+              <img src={sop.image_url} alt="SOP" style={{ maxWidth: '100%', marginTop: 10 }} />
+            )}
+            <button onClick={() => handleEdit(sop)} style={{ marginRight: 10 }}>Edit</button>
+            <button onClick={() => handleDelete(sop.id)}>Delete</button>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
